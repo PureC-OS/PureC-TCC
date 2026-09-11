@@ -12,6 +12,10 @@
 *.log
 *.bz2
 *.zip
+*.tar.gz
+dist/
+release_assets/
+SHA256SUMS.txt
 .gdb_history
 a.out
 tcc_g

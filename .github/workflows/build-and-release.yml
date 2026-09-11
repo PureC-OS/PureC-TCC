@@ -1,0 +1,144 @@
+name: Build, Test and Release PureC-TCC
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Build & Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Configure & Test TCC
+        run: |
+          ./configure
+          make
+          make test -k
+
+  build:
+    name: Package TCC Distribution
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential zip texinfo
+
+      - name: Build and install to distribution prefix
+        run: |
+          ./configure --prefix="$(pwd)/dist" --enable-cross
+          make
+          make cross
+          make install
+
+      - name: Package distribution artifacts
+        id: package
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            VERSION="nightly-${SHORT_SHA}"
+          fi
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+          # Create archives
+          tar -czvf "purec-tcc-${VERSION}-linux-x86_64.tar.gz" -C dist .
+          (cd dist && zip -r "../purec-tcc-${VERSION}-linux-x86_64.zip" .)
+
+          # Compute SHA-256 checksums
+          sha256sum "purec-tcc-${VERSION}-linux-x86_64.tar.gz" \
+                    "purec-tcc-${VERSION}-linux-x86_64.zip" > SHA256SUMS.txt
+
+          # Collect all release files in a flat folder
+          mkdir -p release_assets
+          cp "purec-tcc-${VERSION}-linux-x86_64.tar.gz" release_assets/
+          cp "purec-tcc-${VERSION}-linux-x86_64.zip" release_assets/
+          cp SHA256SUMS.txt release_assets/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: purec-tcc-artifacts
+          path: release_assets/*
+          retention-days: 14
+
+  release:
+    name: Publish Release
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: purec-tcc-artifacts
+          path: release_assets
+
+      - name: Determine release parameters
+        id: vars
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG_NAME="${{ github.ref_name }}"
+            RELEASE_NAME="PureC-TCC ${TAG_NAME}"
+            IS_PRERELEASE="false"
+          else
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            TAG_NAME="nightly-${SHORT_SHA}"
+            RELEASE_NAME="PureC-TCC Nightly (${SHORT_SHA})"
+            IS_PRERELEASE="true"
+          fi
+
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "release_name=${RELEASE_NAME}" >> $GITHUB_OUTPUT
+          echo "is_prerelease=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag_name }}
+          name: ${{ steps.vars.outputs.release_name }}
+          body: |
+            ## Automated Release: ${{ steps.vars.outputs.release_name }}
+
+            ### Status
+            - **TCC Test Suite**: PASSED
+            - **Cross Compilers Built**: x86_64, i386, arm, aarch64, riscv64, c67
+            - **Commit**: ${{ github.sha }}
+
+            ### Release Assets:
+            - `purec-tcc-*-linux-x86_64.tar.gz`: Prebuilt binaries (`tcc`, cross-compilers), `libtcc`, headers, and docs
+            - `purec-tcc-*-linux-x86_64.zip`: ZIP archive distribution
+            - `SHA256SUMS.txt`: SHA-256 checksums of released archives
+          files: release_assets/*
+          draft: false
+          prerelease: ${{ steps.vars.outputs.is_prerelease == 'true' }}
+
