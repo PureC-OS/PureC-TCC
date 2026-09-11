@@ -30,6 +30,8 @@ config*.h
 config*.mak
 config.texi
 conftest*
+conftest-*
+!conftest.c
 c2str
 tags
 TAGS
