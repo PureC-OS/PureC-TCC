@@ -839,6 +839,12 @@ LIBTCCAPI TCCState *tcc_new(void)
     /* might be used in error() before preprocess_start() */
     s->include_stack_ptr = s->include_stack;
 
+
+#ifdef TCC_TARGET_PUREC
+    /* PureC OS loader is static-only (no INTERP/PLT/GOT support):
+       dynamic output would fault at the first PLT call. */
+    s->static_link = 1; /* TCC_PUREC_STATIC_DEFAULT */
+#endif
     tcc_set_lib_path(s, CONFIG_TCCDIR);
     return s;
 }
